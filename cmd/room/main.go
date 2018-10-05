@@ -1,4 +1,4 @@
-package main
+package room
 
 import (
 	"github.com/n3wscott/chat/pkg/api"
@@ -10,13 +10,13 @@ func main() {
 
 	r := room.NewRoom(done, "scott").Run()
 
-	r.Room <- api.Message{Body:"Welcome to the room!"}
+	r.Room <- api.Message{Body: "Welcome to the room!"}
 
 	go func() {
 		for {
 			select {
 			case msg := <-r.Entry:
-				r.Room <- api.Message{Author:"scott", Body:msg.Body}
+				r.Room <- api.Message{Author: "scott", Body: msg.Body}
 			}
 		}
 	}()
