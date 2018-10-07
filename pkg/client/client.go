@@ -2,7 +2,7 @@ package client
 
 import (
 	"fmt"
-	"log"
+	"github.com/n3wscott/chat/pkg/api"
 	"net"
 )
 
@@ -11,8 +11,8 @@ func NewClient(name, host string, port int) *Client {
 		name:    name,
 		network: "tcp",
 		address: fmt.Sprintf("%s:%d", host, port),
-		Reader:  make(chan []byte),
-		Writer:  make(chan []byte),
+		Reader:  make(chan api.Message),
+		Writer:  make(chan api.Message),
 		Done:    make(chan bool),
 	}
 }
@@ -26,8 +26,8 @@ type Client struct {
 
 	listener net.Listener
 
-	Reader chan []byte
-	Writer chan []byte
+	Reader chan api.Message
+	Writer chan api.Message
 	Done   chan bool
 }
 
@@ -45,7 +45,7 @@ func (c *Client) Connect() error {
 func (c *Client) onConnect() {
 	defer c.connection.Close()
 
-	_, err := c.connection.Write([]byte(c.name))
+	_, err := c.connection.Write((&api.Message{Author: c.name}).Json())
 	if err != nil {
 		fmt.Printf("Error in connection: %v\n", err)
 		return
@@ -54,10 +54,8 @@ func (c *Client) onConnect() {
 	go c.doRead()
 	for {
 		select {
-		case r := <-c.Reader:
-			log.Println(string(r))
-		case w := <-c.Writer:
-			_, err := c.connection.Write(w)
+		case m := <-c.Writer:
+			_, err := c.connection.Write(m.Json())
 			if err != nil {
 				fmt.Printf("Error writing to connection: %v\n", err)
 				c.Done <- true
@@ -71,12 +69,12 @@ func (c *Client) onConnect() {
 func (c *Client) doRead() {
 	msg := make([]byte, 1024)
 	for {
-		length, err := c.connection.Read(msg) // TODO: make this an object.
+		length, err := c.connection.Read(msg)
 		if err != nil {
 			fmt.Printf("Error reading from connection: %v\n", err)
 			c.Done <- true
 			return
 		}
-		c.Reader <- msg[:length]
+		c.Reader <- api.Parse(msg[:length])
 	}
 }

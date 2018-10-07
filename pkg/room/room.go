@@ -4,31 +4,55 @@ import (
 	"fmt"
 	"github.com/jroimartin/gocui"
 	"github.com/n3wscott/chat/pkg/api"
+	"github.com/n3wscott/chat/pkg/client"
 	"log"
 	"strings"
 	"time"
 )
 
-func NewRoom(done chan bool, me string) *Room {
-
-	return &Room{
-		me: me,
-		done: done,
+func NewRoom(me string, host string, port int) *Room {
+	r := &Room{
+		me:    me,
+		Done:  make(chan bool, 1),
 		Entry: make(chan api.Message),
-		Room: make(chan api.Message),
+		Room:  make(chan api.Message),
+	}
+	go r.connectClient(host, port)
+	return r
+}
+
+func (r *Room) connectClient(host string, port int) {
+	c := client.NewClient(r.me, host, port)
+
+	if err := c.Connect(); err != nil {
+		fmt.Printf("Failed to connect: %v\n", err)
+		r.Done <- true
+		return
+	}
+
+	for {
+		select {
+		case msg := <-r.Entry:
+			m := api.Message{Author: r.me, Body: msg.Body}
+			r.Room <- m
+			c.Writer <- m
+
+		case m := <-c.Reader:
+			r.Room <- m
+		}
 	}
 }
 
 const (
 	ColorYellow = 226
-	ColorGreen = 2
+	ColorGreen  = 2
 )
 
 type Room struct {
-	me string
-	done chan bool
+	me    string
+	Done  chan bool
 	Entry chan api.Message
-	Room chan api.Message
+	Room  chan api.Message
 }
 
 func setCurrentViewOnTop(g *gocui.Gui, name string) (*gocui.View, error) {
@@ -38,7 +62,7 @@ func setCurrentViewOnTop(g *gocui.Gui, name string) (*gocui.View, error) {
 	return g.SetViewOnTop(name)
 }
 
-func (r *Room)layout(g *gocui.Gui) error {
+func (r *Room) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 	if v, err := g.SetView("side", -1, -1, 20, maxY-2); err != nil &&
 		err != gocui.ErrUnknownView {
@@ -73,49 +97,42 @@ func (r *Room)layout(g *gocui.Gui) error {
 		v.Highlight = true
 		g.SetViewOnTop("input")
 	}
-/*
-	if v, err := g.SetView("but1", 2, 2, 22, 7); err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
+	/*
+		if v, err := g.SetView("but1", 2, 2, 22, 7); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			v.Highlight = true
+			v.SelBgColor = gocui.ColorGreen
+			v.SelFgColor = gocui.ColorBlack
+			fmt.Fprintln(v, "Button 1 - line 1")
+			fmt.Fprintln(v, "Button 1 - line 2")
+			fmt.Fprintln(v, "Button 1 - line 3")
+			fmt.Fprintln(v, "Button 1 - line 4")
 		}
-		v.Highlight = true
-		v.SelBgColor = gocui.ColorGreen
-		v.SelFgColor = gocui.ColorBlack
-		fmt.Fprintln(v, "Button 1 - line 1")
-		fmt.Fprintln(v, "Button 1 - line 2")
-		fmt.Fprintln(v, "Button 1 - line 3")
-		fmt.Fprintln(v, "Button 1 - line 4")
-	}
-	if v, err := g.SetView("but2", 24, 2, 44, 4); err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
+		if v, err := g.SetView("but2", 24, 2, 44, 4); err != nil {
+			if err != gocui.ErrUnknownView {
+				return err
+			}
+			v.Highlight = true
+			v.SelBgColor = gocui.ColorGreen
+			v.SelFgColor = gocui.ColorBlack
+			fmt.Fprintln(v, "Button 2 - line 1")
 		}
-		v.Highlight = true
-		v.SelBgColor = gocui.ColorGreen
-		v.SelFgColor = gocui.ColorBlack
-		fmt.Fprintln(v, "Button 2 - line 1")
-	}
-*/
+	*/
 	return nil
 }
 
-func (r *Room)quit(g *gocui.Gui, v *gocui.View) error {
+func (r *Room) quit(g *gocui.Gui, v *gocui.View) error {
 	log.Print("got to done")
-	r.done <- true
+	r.Done <- true
 	return gocui.ErrQuit
 }
 
 func (r *Room) post(g *gocui.Gui, v *gocui.View) error {
 
-	//chat, err := g.View("chat")
-	//if err != nil {
-	//	log.Panicln(err)
-	//}
-
-	//fmt.Fprintf(chat, v.Buffer())
-
 	r.Entry <- api.Message{
-		Body:v.Buffer(),
+		Body: v.Buffer(),
 	}
 
 	v.Clear()
@@ -154,7 +171,7 @@ func delMsg(g *gocui.Gui, v *gocui.View) error {
 	return nil
 }
 
-func (r *Room)keybindings(g *gocui.Gui) error {
+func (r *Room) keybindings(g *gocui.Gui) error {
 	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, r.quit); err != nil {
 		return err
 	}
@@ -190,11 +207,11 @@ func (r *Room) Run() *Room {
 	}
 
 	go func() {
-		time.Sleep(400*time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 		ready <- true
 	}()
 
-	go  func() {
+	go func() {
 		g.Cursor = true
 		g.Mouse = true
 		g.SelFgColor = gocui.ColorGreen
@@ -205,10 +222,8 @@ func (r *Room) Run() *Room {
 			log.Panicln(err)
 		}
 
-
-
 		if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
-			r.done <- true
+			r.Done <- true
 		}
 		g.Close()
 	}()
@@ -225,17 +240,17 @@ func (r *Room) Run() *Room {
 					msg.Body = strings.TrimSuffix(msg.Body, "\n")
 				}
 				if len(msg.Author) == 0 {
-					fmt.Fprintf(chat,"\x1b[38;5;%dm%s\x1b[0m\n", ColorYellow, msg.Body)
+					fmt.Fprintf(chat, "\x1b[38;5;%dm%s\x1b[0m\n", ColorYellow, msg.Body)
 
-					g.Update(func(gui *gocui.Gui) error {return nil})
+					g.Update(func(gui *gocui.Gui) error { return nil })
 
 				} else if len(msg.Body) > 0 {
 					if msg.Author == r.me {
-						fmt.Fprintf(chat,"\x1b[38;5;%dm%s\x1b[0m: %s\n", ColorGreen, msg.Author, msg.Body)
+						fmt.Fprintf(chat, "\x1b[38;5;%dm%s\x1b[0m: %s\n", ColorGreen, msg.Author, msg.Body)
 					} else {
 						fmt.Fprintf(chat, "%s: %s\n", msg.Author, msg.Body)
 					}
-					g.Update(func(gui *gocui.Gui) error {return nil})
+					g.Update(func(gui *gocui.Gui) error { return nil })
 				}
 			}
 		}

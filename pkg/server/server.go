@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"github.com/n3wscott/chat/pkg/api"
 	"net"
 )
 
@@ -57,8 +58,12 @@ func (s *Server) onAccept(conn net.Conn) {
 		s.onClose(conn, "")
 		return
 	}
-	name := string(data[:length])
-	s.broadcast(conn, name+" has connected")
+	m := api.Parse(data[:length])
+	name := m.Author
+
+	s.broadcast(conn, &api.Message{Author: m.Author, Body: "has connected"})
+
+	conn.Write((&api.Message{Body: "Welcome to the room!"}).Json())
 
 	for {
 		length, err := conn.Read(data)
@@ -66,7 +71,8 @@ func (s *Server) onAccept(conn net.Conn) {
 			s.onClose(conn, name)
 			return
 		}
-		s.say(conn, name, string(data[:length]))
+		m := api.Parse(data[:length])
+		s.broadcast(conn, &m)
 	}
 }
 
@@ -77,22 +83,17 @@ func (s *Server) onClose(conn net.Conn, name string) {
 		if c.RemoteAddr() == conn.RemoteAddr() {
 			s.connections = append(s.connections[:index], s.connections[index+1:]...)
 			if name != "" {
-				s.broadcast(conn, name+" has disconnected")
+				s.broadcast(conn, &api.Message{Author: name, Body: "has disconnected"})
 			}
 		}
 	}
 }
 
-func (s *Server) say(from net.Conn, name, msg string) {
-	from.Write([]byte("You: " + msg))
-	s.broadcast(from, name+": "+msg)
-}
-
-func (s *Server) broadcast(from net.Conn, msg string) {
-	fmt.Println(msg)
+func (s *Server) broadcast(from net.Conn, m *api.Message) {
+	fmt.Printf("%+v\n", m)
 	for _, c := range s.connections {
 		if c.RemoteAddr() != from.RemoteAddr() {
-			c.Write([]byte(msg))
+			c.Write(m.Json())
 		}
 	}
 }
