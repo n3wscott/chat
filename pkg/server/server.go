@@ -1,99 +1,167 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/n3wscott/chat/pkg/api"
-	"net"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"net/http"
+	"time"
 )
 
 func NewServer(host string, port int) *Server {
 	return &Server{
-		network: "tcp",
 		address: fmt.Sprintf("%s:%d", host, port),
+		clients: make(map[string]chan bool, 5),
+		seen:    make([]string, 0),
 	}
 }
 
 type Server struct {
-	network     string
-	address     string
-	connections []net.Conn
+	address string
 
-	listener net.Listener
+	clients map[string]chan bool
+
+	server *http.Server
+
+	message *api.Message // TODO: this should be a ring buffer.
+	seen    []string
 }
 
-func (s *Server) Listen() error {
+func (s *Server) Run() error {
 
-	if l, err := net.Listen("tcp", s.address); err != nil {
-		return err
-	} else {
-		s.listener = l
-		go s.listen()
+	http.HandleFunc("/chat", s.roomFunc)
+	http.HandleFunc("/msg", s.chatFunc)
+
+	s.server = &http.Server{
+		Addr:         s.address,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
-	return nil
+	return s.server.ListenAndServe()
 }
 
 func (s *Server) Close() {
-	if s.listener != nil {
-		s.listener.Close()
+	if s.server != nil {
+		s.server.Close()
 	}
 }
 
-func (s *Server) listen() {
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			fmt.Println("Error accepting client: ", err.Error())
-		}
-		s.connections = append(s.connections, conn) // TODO: this should be a map.
-		go s.onAccept(conn)
-	}
-}
-
-func (s *Server) onAccept(conn net.Conn) {
-	data := make([]byte, 1024) // TODO: for large messages this will fail.
-	fmt.Println("Connected: ", conn.RemoteAddr())
-
-	length, err := conn.Read(data)
+func (s *Server) getLongPollDuration(r *http.Request) time.Duration {
+	timeout, err := time.ParseDuration(r.URL.Query().Get("wait"))
 	if err != nil {
-		s.onClose(conn, "")
+		return 55 * time.Second
+	}
+
+	log.Printf("found custom timeout: %s", timeout)
+	return timeout
+}
+
+func (s *Server) addClient(id string) chan bool {
+	if _, ok := s.clients[id]; !ok {
+		s.clients[id] = make(chan bool)
+	}
+	return s.clients[id]
+}
+
+func (s *Server) removeClient(id string) {
+	delete(s.clients, id)
+}
+
+func (s *Server) waitForMessages(ctx context.Context, wait time.Duration) []api.Message {
+	timeout := time.Tick(wait)
+
+	clientId := randString(8)
+	update := s.addClient(clientId)
+	defer s.removeClient(clientId)
+
+	select {
+	case <-ctx.Done():
+		log.Printf("context cancel")
+		return []api.Message(nil)
+	case <-timeout:
+		log.Printf("method timeout: %s", clientId)
+		return []api.Message(nil)
+	case <-update:
+		log.Printf("update for: %s", clientId)
+		return []api.Message{*s.message}
+	}
+}
+
+func (s *Server) chatFunc(rw http.ResponseWriter, req *http.Request) {
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		log.Print(err)
 		return
 	}
-	m := api.Parse(data[:length])
-	name := m.Author
+	m := &api.Message{}
+	if err := json.Unmarshal(body, m); err != nil {
+		log.Print(err)
+		return
+	}
+	s.broadcast(m)
+}
 
-	s.broadcast(conn, &api.Message{Author: m.Author, Body: "has connected"})
-
-	conn.Write((&api.Message{Body: "Welcome to the room!"}).Json())
-
-	for {
-		length, err := conn.Read(data)
-		if err != nil {
-			s.onClose(conn, name)
+func (s *Server) addHere(h string) {
+	for _, s := range s.seen {
+		if s == h {
 			return
 		}
-		m := api.Parse(data[:length])
-		s.broadcast(conn, &m)
 	}
+	s.seen = append(s.seen, h) // TODO: would be cool to add a timeout
 }
 
-func (s *Server) onClose(conn net.Conn, name string) {
-	fmt.Println("Disconnected: ", conn.RemoteAddr())
-	conn.Close()
-	for index, c := range s.connections {
-		if c.RemoteAddr() == conn.RemoteAddr() {
-			s.connections = append(s.connections[:index], s.connections[index+1:]...)
-			if name != "" {
-				s.broadcast(conn, &api.Message{Author: name, Body: "has disconnected"})
-			}
-		}
+func (s *Server) roomFunc(w http.ResponseWriter, r *http.Request) {
+	timeout := s.getLongPollDuration(r)
+	me := r.URL.Query().Get("me")
+
+	s.addHere(me)
+
+	messages := s.waitForMessages(r.Context(), timeout)
+	if len(messages) == 0 {
+		// write long poll timeout
+		w.WriteHeader(http.StatusNotModified)
 	}
+	w.Header().Set("Content-Type", "application/json")
+	// do not cache response
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	room := &api.Room{
+		Here:     s.seen,
+		Messages: messages,
+	}
+
+	js, err := json.Marshal(room)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write(js)
 }
 
-func (s *Server) broadcast(from net.Conn, m *api.Message) {
-	fmt.Printf("%+v\n", m)
-	for _, c := range s.connections {
-		if c.RemoteAddr() != from.RemoteAddr() {
-			c.Write(m.Json())
-		}
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func randString(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return string(b)
+}
+
+func (s *Server) broadcast(m *api.Message) {
+	s.message = m
+
+	for _, c := range s.clients {
+		c <- true
 	}
 }

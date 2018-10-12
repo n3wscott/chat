@@ -5,18 +5,24 @@ import (
 	"log"
 )
 
-type Message struct {
-	Author string `json:"a"`
-	Body   string `json:"b"`
+type Room struct {
+	Here     []string  `json:"here"`
+	Messages []Message `json:"msg"`
 }
 
-func Parse(bytes []byte) Message {
-	m := &Message{}
-	if err := json.Unmarshal(bytes, m); err != nil {
-		log.Printf("failed to parse: %v", err)
-		return Message{}
+type Message struct {
+	ID     string `json:"id"`
+	Author string `json:"author"`
+	Body   string `json:"body"`
+}
+
+func Parse(bytes []byte) *Room {
+	r := &Room{}
+	if err := json.Unmarshal(bytes, &r); err != nil {
+		log.Printf("failed to parse %s: %v", string(bytes), err)
+		return &Room{}
 	}
-	return *m
+	return r
 }
 
 func (m *Message) Json() []byte {

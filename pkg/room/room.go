@@ -13,9 +13,10 @@ import (
 func NewRoom(me string, host string, port int) *Room {
 	r := &Room{
 		me:    me,
+		here:  []string(nil),
 		Done:  make(chan bool, 1),
-		Entry: make(chan api.Message),
-		Room:  make(chan api.Message),
+		Entry: make(chan api.Message, 10),
+		Room:  make(chan api.Message, 10),
 	}
 	go r.connectClient(host, port)
 	return r
@@ -24,23 +25,34 @@ func NewRoom(me string, host string, port int) *Room {
 func (r *Room) connectClient(host string, port int) {
 	c := client.NewClient(r.me, host, port)
 
-	if err := c.Connect(); err != nil {
-		fmt.Printf("Failed to connect: %v\n", err)
-		r.Done <- true
-		return
-	}
+	go c.Run()
+	defer func() {
+		c.Done <- true
+	}()
 
 	for {
 		select {
 		case msg := <-r.Entry:
 			m := api.Message{Author: r.me, Body: msg.Body}
+			c.Tx <- m
+		case m := <-c.Msg:
 			r.Room <- m
-			c.Writer <- m
-
-		case m := <-c.Reader:
-			r.Room <- m
+		case h := <-c.Here:
+			if r.addHere(h) {
+				r.Room <- api.Message{Body: fmt.Sprintf("%s has joined the room.", h)}
+			}
 		}
 	}
+}
+
+func (r *Room) addHere(n string) bool {
+	for _, h := range r.here {
+		if h == n {
+			return false
+		}
+	}
+	r.here = append(r.here, n)
+	return true
 }
 
 const (
@@ -50,6 +62,7 @@ const (
 
 type Room struct {
 	me    string
+	here  []string
 	Done  chan bool
 	Entry chan api.Message
 	Room  chan api.Message
@@ -64,15 +77,14 @@ func setCurrentViewOnTop(g *gocui.Gui, name string) (*gocui.View, error) {
 
 func (r *Room) layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
-	if v, err := g.SetView("side", -1, -1, 20, maxY-2); err != nil &&
+	if v, err := g.SetView("here", -1, -1, 20, maxY-2); err != nil &&
 		err != gocui.ErrUnknownView {
 		return err
 	} else {
 		v.Clear()
-		fmt.Fprintln(v, "Button 1 - line 1")
-		fmt.Fprintln(v, "Button 1 - line 2")
-		fmt.Fprintln(v, "Button 1 - line 3")
-		fmt.Fprintln(v, "Button 1 - line 4")
+		for _, h := range r.here {
+			fmt.Fprintln(v, h)
+		}
 	}
 	if v, err := g.SetView("chat", 20, -1, maxX, maxY-2); err != nil &&
 		err != gocui.ErrUnknownView {

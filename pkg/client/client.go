@@ -1,80 +1,107 @@
 package client
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/n3wscott/chat/pkg/api"
-	"net"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"time"
 )
 
 func NewClient(name, host string, port int) *Client {
+	var url string
+	if port == 80 {
+		url = fmt.Sprintf("http://%s", host)
+	} else if port == 443 {
+		url = fmt.Sprintf("https://%s", host)
+	} else {
+		url = fmt.Sprintf("http://%s:%d", host, port)
+	}
 	return &Client{
-		name:    name,
-		network: "tcp",
-		address: fmt.Sprintf("%s:%d", host, port),
-		Reader:  make(chan api.Message),
-		Writer:  make(chan api.Message),
-		Done:    make(chan bool),
+		name: name,
+		url:  url,
+		Here: make(chan string, 10),
+		Msg:  make(chan api.Message, 10),
+		Tx:   make(chan api.Message, 10),
+		Done: make(chan bool),
 	}
 }
 
 type Client struct {
 	name string
+	url  string
 
-	network    string
-	address    string
-	connection net.Conn
-
-	listener net.Listener
-
-	Reader chan api.Message
-	Writer chan api.Message
-	Done   chan bool
+	Here chan string
+	Msg  chan api.Message
+	Tx   chan api.Message
+	Done chan bool
 }
 
-func (c *Client) Connect() error {
-	conn, err := net.Dial(c.network, c.address)
-	if err != nil {
-		return err
-	}
-	c.connection = conn
+func (c *Client) Run() {
+	readDone := make(chan bool)
+	writeDone := make(chan bool)
 
-	go c.onConnect()
-	return nil
+	go c.doReader(readDone)
+	go c.doWriter(writeDone)
+
+	select {
+	case <-c.Done:
+		readDone <- true
+		writeDone <- true
+	}
 }
 
-func (c *Client) onConnect() {
-	defer c.connection.Close()
+func (c *Client) doReader(done chan bool) {
 
-	_, err := c.connection.Write((&api.Message{Author: c.name}).Json())
-	if err != nil {
-		fmt.Printf("Error in connection: %v\n", err)
-		return
+	for {
+		// Check done was called in a non-blocking way.
+		select {
+		case <-done:
+			return
+		default:
+			// continue
+		}
+
+		url := fmt.Sprintf("%s/chat?me=%s&wait=%s", c.url, c.name, 30*time.Second)
+		res, err := http.Get(url)
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+		resourceResp, err := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+
+		if res.StatusCode == 200 {
+			room := api.Parse(resourceResp)
+			for _, h := range room.Here {
+				c.Here <- h
+			}
+			for _, m := range room.Messages {
+				c.Msg <- m
+			}
+		}
 	}
 
-	go c.doRead()
+	return
+}
+
+func (c *Client) doWriter(done chan bool) {
 	for {
 		select {
-		case m := <-c.Writer:
-			_, err := c.connection.Write(m.Json())
+		case m := <-c.Tx:
+			_, err := http.Post(c.url+"/msg", "application/json", bytes.NewBuffer(m.Json()))
 			if err != nil {
-				fmt.Printf("Error writing to connection: %v\n", err)
-				c.Done <- true
+				log.Print(err)
+				continue
 			}
-		case <-c.Done:
+		case <-done:
 			return
 		}
-	}
-}
-
-func (c *Client) doRead() {
-	msg := make([]byte, 1024)
-	for {
-		length, err := c.connection.Read(msg)
-		if err != nil {
-			fmt.Printf("Error reading from connection: %v\n", err)
-			c.Done <- true
-			return
-		}
-		c.Reader <- api.Parse(msg[:length])
 	}
 }
