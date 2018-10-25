@@ -1,0 +1,43 @@
+apiVersion: eventing.knative.dev/v1alpha1
+kind: Channel
+metadata:
+  name: bot-source
+spec:
+  provisioner:
+    ref:
+      apiVersion: eventing.knative.dev/v1alpha1
+      kind: ClusterProvisioner
+      name: in-memory-channel
+
+---
+
+apiVersion: sources.eventing.knative.dev/v1alpha1
+kind: ContainerSource
+metadata:
+  name: bot
+spec:
+  image: github.com/n3wscott/chat/cmd/source
+  args:
+  - '--host=chatserver.default.n3wscott.com'
+  - '--port=80'
+  sink:
+    apiVersion: eventing.knative.dev/v1alpha1
+    kind: Channel
+    name: bot-source
+
+---
+
+apiVersion: eventing.knative.dev/v1alpha1
+kind: Subscription
+metadata:
+  name: bot-reciever
+spec:
+  call:
+    target:
+      apiVersion: serving.knative.dev/v1alpha1
+      kind: Service
+      name: message-dumper
+  from:
+    apiVersion: eventing.knative.dev/v1alpha1
+    kind: Channel
+    name: bot-source

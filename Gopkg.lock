@@ -2,12 +2,36 @@
 
 
 [[projects]]
+  digest = "1:ffe9824d294da03b391f44e1ae8281281b4afc1bdaa9588c9097785e3af10cec"
+  name = "github.com/davecgh/go-spew"
+  packages = ["spew"]
+  pruneopts = "UT"
+  revision = "8991bc29aa16c548c550c7ff78260e27b9ab7c73"
+  version = "v1.1.1"
+
+[[projects]]
+  digest = "1:3a26588bc48b96825977c1b3df964f8fd842cd6860cc26370588d3563433cf11"
+  name = "github.com/google/uuid"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "d460ce9f8df2e77fb1ba55ca87fafed96c607494"
+  version = "v1.0.0"
+
+[[projects]]
   digest = "1:114ecad51af93a73ae6781fd0d0bc28e52b433c852b84ab4b4c109c15e6c6b6d"
   name = "github.com/jroimartin/gocui"
   packages = ["."]
   pruneopts = "UT"
   revision = "c055c87ae801372cd74a0839b972db4f7697ae5f"
   version = "v0.4.0"
+
+[[projects]]
+  branch = "master"
+  digest = "1:5f9056df2f0f5143cf9c86754c1c0d71db89644b02a75004a5cd70e08019388c"
+  name = "github.com/knative/eventing"
+  packages = ["pkg/event"]
+  pruneopts = "UT"
+  revision = "80860baecb7b86a31b20b02a558c76f223aaa8a1"
 
 [[projects]]
   digest = "1:cdb899c199f907ac9fb50495ec71212c95cb5b0e0a8ee0800da0238036091033"
@@ -28,6 +52,10 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  input-imports = ["github.com/jroimartin/gocui"]
+  input-imports = [
+    "github.com/google/uuid",
+    "github.com/jroimartin/gocui",
+    "github.com/knative/eventing/pkg/event",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1
